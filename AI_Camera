@@ -1,0 +1,144 @@
+import paho.mqtt.client as mqtt
+import cv2
+import numpy as np
+from deepface import DeepFace
+import pickle
+import time
+
+MQTT_BROKER = "3fa72b5859424931862626cce0f36321.s1.eu.hivemq.cloud"
+MQTT_PORT = 8883
+MQTT_USER = "caretaker"
+MQTT_PASS = "Caretaker123"
+
+TOPIC_ALERT = "dispenser/1/alerts"
+TOPIC_AI_RESULT = "dispenser/1/ai_result"
+
+# ---------------------------
+# LOAD PATIENT EMBEDDING
+# ---------------------------
+with open("patient_embedding.pkl", "rb") as f:
+    PATIENT = np.array(pickle.load(f))
+
+face_cascade = cv2.CascadeClassifier(
+    cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+)
+
+def cosine_similarity(a, b):
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+
+# ---------------------------
+# FACE DETECTION FUNCTION
+# ---------------------------
+def start_camera_and_detect():
+
+    cam = cv2.VideoCapture(0)
+    if not cam.isOpened():
+        print("Camera failed to open!")
+        return "ABSENT"
+
+    print("Camera opened. Scanning...")
+
+    start_time = time.time()
+    MIN_ACTIVE_TIME = 4.0          # Camera must stay open at least 2 sec
+    TOTAL_TIMEOUT  = 6.0          # Entire detection window
+    stable_detect_frames = 0       # Need multiple good frames
+    required_stable_frames = 3     # For stability
+
+    final_label = "ABSENT"
+
+    while True:
+        elapsed = time.time() - start_time
+        if elapsed > TOTAL_TIMEOUT:
+            break
+
+        ret, frame = cam.read()
+        if not ret:
+            continue
+
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        faces = face_cascade.detectMultiScale(gray, 1.2, 5)
+
+        label = "NO FACE"
+        color = (0, 0, 255)
+
+        for (x, y, w, h) in faces:
+            face_crop = frame[y:y+h, x:x+w]
+
+            try:
+                rep = DeepFace.represent(face_crop, model_name="Facenet512",
+                                         enforce_detection=False)
+                emb = np.array(rep[0]["embedding"])
+                sim = cosine_similarity(emb, PATIENT)
+
+                if sim > 0.55:
+                    label = f"PATIENT ({sim:.3f})"
+                    color = (0, 255, 0)
+                    stable_detect_frames += 1
+                    if stable_detect_frames >= required_stable_frames:
+                        final_label = "PRESENT"
+                else:
+                    label = f"UNKNOWN ({sim:.3f})"
+                    color = (0, 0, 255)
+                    final_label = "UNKNOWN"
+
+            except:
+                pass
+
+            cv2.rectangle(frame, (x,y), (x+w, y+h), color, 2)
+            cv2.putText(frame, label, (x, y-10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+
+        cv2.imshow("DeepFace Recognition", frame)
+
+        # Camera must remain open for at least 2 seconds
+        if final_label == "PRESENT" and elapsed > MIN_ACTIVE_TIME:
+            break
+
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
+    cam.release()
+    cv2.destroyAllWindows()
+
+    print("Final result:", final_label)
+    return final_label
+
+
+# ---------------------------
+# MQTT HANDLERS
+# ---------------------------
+def on_connect(client, userdata, flags, rc):
+    print("MQTT Connected:", rc)
+    client.subscribe(TOPIC_ALERT)
+    print("Listening for dispenser alerts...")
+
+
+def on_message(client, userdata, msg):
+    payload = msg.payload.decode()
+    print("MQTT:", payload)
+
+    if payload in ["PRESENCE_CHECK", "CHECK_PRESENCE", "ALARM_TRIGGERED"]:
+        print("Starting AI presence detection...")
+        result = start_camera_and_detect()
+
+        # publish twice for reliability
+        client.publish(TOPIC_AI_RESULT, result)
+        time.sleep(0.1)
+        client.publish(TOPIC_AI_RESULT, result)
+
+        print("Published AI result:", result)
+
+
+
+# ---------------------------
+# MQTT SETUP
+# ---------------------------
+client = mqtt.Client()
+client.username_pw_set(MQTT_USER, MQTT_PASS)
+client.tls_set()
+client.on_connect = on_connect
+client.on_message = on_message
+client.connect(MQTT_BROKER, MQTT_PORT)
+
+client.loop_forever()

@@ -1,0 +1,794 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Auto Drug Dispenser — Dashboard</title>
+
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap" rel="stylesheet">
+
+<style>
+:root{
+  --bg:#0f1720;
+  --card:#111826;
+  --muted:#9aa6b2;
+  --accent:#3ea3ff;
+  --accent-dark:#2a8fe0;
+  font-family:"Inter",system-ui,-apple-system,Segoe UI,Roboto,"Helvetica Neue",Arial;
+}
+/* ---------- LIGHT MODE ---------- */
+body.light {
+  --bg:#f3f6fb;
+  --card:#ffffff;
+  --muted:#5b6b7c;
+  --accent:#2563eb;
+  --accent-dark:#1e4fd6;
+  color:#0f172a;
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:linear-gradient(180deg,var(--bg),#081018);color:#e6eef6;-webkit-font-smoothing:antialiased}
+.app{
+  display:grid;
+  grid-template-columns:360px 1fr; /* fixed sidebar width = 360px */
+  gap:18px;
+  padding:18px;
+  height:100vh;
+  align-items:start;
+}
+
+/* SIDEBAR */
+.sidebar{
+  width:360px;
+  min-width:360px;
+  background:var(--card);
+  border-radius:12px;
+  padding:18px;
+  box-shadow:0 8px 30px rgba(2,6,23,0.6);
+}
+.logo{width:48px;height:48px;border-radius:10px;background:linear-gradient(135deg,var(--accent),#7ad0ff);display:flex;align-items:center;justify-content:center;font-weight:700;color:#081018}
+h1{font-size:18px;margin:0}
+.subtitle{color:var(--muted);font-size:12px;margin-top:4px}
+.card{background:var(--card);border-radius:10px;padding:12px;box-shadow:0 8px 20px rgba(3,6,13,0.55)}
+.muted{color:var(--muted);font-size:13px}
+.status-pill{padding:6px 10px;border-radius:999px;background:rgba(255,255,255,0.03);font-weight:600;font-size:13px}
+
+.input{width:100%;padding:9px;border-radius:8px;border:1px solid rgba(255,255,255,0.03);background:transparent;color:inherit;margin-top:8px;font-size:13px}
+.small{padding:8px 10px;border-radius:8px;border:none;background:var(--accent);color:#041022;font-weight:700;cursor:pointer}
+.small.ghost{background:transparent;border:1px solid rgba(255,255,255,0.04);color:var(--accent)}
+
+/* TIMER */
+.timer-card{width:100%;min-width:0}
+.timer-row{display:flex;gap:8px;margin-top:10px;align-items:center}
+.timer-row select{
+  width:96px;max-width:96px;padding:8px;border-radius:8px;background:#0f1720;color:#e6eef6;border:1px solid rgba(255,255,255,0.03)
+}
+.manual-row{display:flex;gap:8px;margin-top:8px}
+.manual-row input{
+  width:96px !important;max-width:96px;padding:8px;text-align:center;border-radius:6px;border:1px solid rgba(255,255,255,0.03);background:transparent;color:inherit
+}
+.controls-row{display:flex;gap:8px;margin-top:12px}
+
+/* LOGS */
+.log-list{height:260px;min-height:260px;overflow:auto;padding:8px;border-radius:8px;background:linear-gradient(180deg,rgba(255,255,255,0.01),transparent)}
+.log-item{padding:8px;border-radius:8px;margin-bottom:8px;background:rgba(255,255,255,0.01);display:flex;justify-content:space-between;gap:10px;font-size:13px}
+
+/* TOP-RIGHT */
+.top-right{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+.top-right .card{min-width:150px;flex:0 0 auto}
+
+/* RIGHT COL & CHART */
+.right-col{display:flex;flex-direction:column;gap:12px;margin-top:6px;min-width:260px}
+.chart-wrap{height:260px;padding:12px;background:var(--card);border-radius:10px;display:flex;flex-direction:column}
+.canvas-wrap{flex:1;min-width:0}
+
+/* small responsiveness */
+@media(max-width:980px){
+  .app{grid-template-columns:1fr}
+  .sidebar{order:2;width:100%;min-width:0}
+  .main{order:1}
+}
+
+.notification {
+  padding: 10px 12px;
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+
+.notification.taken {
+  background: rgba(46, 204, 113, 0.15);
+  border-left: 4px solid #2ecc71;
+}
+
+.notification.missed {
+  background: rgba(231, 76, 60, 0.15);
+  border-left: 4px solid #e74c3c;
+}
+
+.notification.unknown {
+  background: rgba(243, 156, 18, 0.15);
+  border-left: 4px solid #f39c12;
+}
+
+.notification.info {
+  background: rgba(52, 152, 219, 0.15);
+  border-left: 4px solid #3498db;
+}
+
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+    <div style="display:flex;gap:12px;align-items:center">
+      <div class="logo">SD</div>
+      <div>
+        <h1 style="margin:0">Drug Dispenser</h1>
+        <div class="subtitle">FYP • Caretaker UI</div>
+      </div>
+    </div>
+
+    <div style="margin-top:14px" class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <div style="font-weight:700">Device status</div>
+          <div class="muted">MQTT status</div>
+        </div>
+        <div id="connBadge" class="status-pill">Disconnected</div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px">
+        <div class="card" style="padding:10px">
+          <div class="muted">Next dose</div>
+          <div id="nextDose" style="font-weight:800;margin-top:6px">--:--:--</div>
+        </div>
+        <div class="card" style="padding:10px">
+          <div class="muted">Next Slot</div>
+          <div id="nextSlot" style="font-weight:800;margin-top:6px">--</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TIMER (fits inside 360px sidebar) -->
+    <div style="margin-top:14px" class="card timer-card">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div style="font-weight:800">Timer (HH:MM:SS)</div>
+        <div class="muted">Quick demo</div>
+      </div>
+
+      <div class="timer-row">
+        <select id="hourSelect"></select>
+        <select id="minuteSelect"></select>
+        <select id="secondSelect"></select>
+      </div>
+
+      <div class="manual-row">
+        <input id="manualHour" placeholder="" maxlength="2">
+        <input id="manualMinute" placeholder="" maxlength="2">
+        <input id="manualSecond" placeholder="" maxlength="2">
+      </div>
+
+      <div class="controls-row">
+        <button id="btnSetTimer" class="small">Set Timer</button>
+        <button id="btnSetNow" class="small ghost">Set +10s</button>
+      </div>
+    </div>
+
+    <div style="margin-top:14px" class="card">
+    <div style="font-weight:700">Scheduler Status</div>
+    <div class="muted" style="margin-top:4px">
+    Auto-assigned slots (real-time)
+    </div>
+
+  <div id="scheduleList"
+       style="margin-top:10px;
+              display:flex;
+              flex-direction:column;
+              gap:6px;
+              font-size:13px;">
+    <div class="muted">No schedules set</div>
+  </div>
+</div>
+
+<div style="display:flex;gap:8px;margin-top:8px">
+  <button id="btnForce" class="small">Force Dispense</button>
+  <button id="btnBuzzer" class="small ghost">Check Presence</button>
+  <button id="btnClearLogs" class="small ghost">Clear Dashboard</button>
+</div>
+<div style="margin-top:8px">
+  <button id="btnExportData" class="small ghost" style="width:100%">
+    Export Test Data
+  </button>
+</div>
+  </div>
+
+  <!-- MAIN -->
+  <div class="main">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+      <div>
+        <h1 style="margin:0">Dashboard</h1>
+        <div class="muted">Real-time monitoring & controls</div>
+      </div>
+
+      <div class="top-right">
+        <div class="card" style="padding:10px">
+          <div class="muted">Local time</div>
+          <div id="localTime" style="font-weight:800">--:--:--</div>
+        </div>
+        <div class="card" style="padding:10px">
+          <div class="muted">Connected device</div>
+          <div id="deviceName" style="font-weight:800">Dispenser_1</div>
+        </div>
+        <button id="themeToggle" class="small ghost">Light mode</button>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:12px;align-items:flex-start;margin-top:12px">
+      <div style="flex:2" class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div style="font-weight:800">Live Logs</div>
+          <div class="muted">real-time events</div>
+        </div>
+        <div id="logs" class="log-list" style="margin-top:10px"></div>
+      </div>
+
+      <div class="right-col">
+        <div class="card" style="min-height:150px">
+        <div style="font-weight:800">AI Result</div>
+        <div style="margin-top:10px">
+    <div id="aiStatus" style="font-size:18px;font-weight:800">—</div>
+    <div class="muted" style="margin-top:10px">
+      Last scan time: <span id="aiTime">—</span></div>
+    <div class="muted" style="margin-top:6px">
+      Trigger source: <span id="aiTrigger">—</span></div>
+  </div>
+</div>
+    <div class="card" style="min-height:135px; margin-top:0px">
+      <div style="font-weight:800">Quick Info</div>
+      <div style="margin-top:10px" class="muted">
+        System state:
+      <strong><span id="systemState">IDLE</span></strong></div>
+      <div style="margin-top:8px" class="muted">
+        Current slot: <span id="slotInfo">—</span></div>
+     <div style="margin-top:6px" class="muted">
+       Next dose: <span id="nextDoseInfo">—</span></div>
+     <div style="margin-top:6px" class="muted">
+       Last motor: <span id="motorInfo">—</span></div>
+    </div>
+      </div>
+    </div>
+
+   <div style="flex:1; margin-top:14px;" class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center">
+    <div style="font-weight:800">Notifications</div>
+    <div class="muted">Caregiver alerts (Wi-Fi)</div>
+  </div>
+
+  <div id="notificationList"
+       style="
+         margin-top:10px;
+         height:420px;
+         overflow:auto;
+         padding:8px;
+         border-radius:8px;
+         background:linear-gradient(180deg,rgba(255,255,255,0.01),transparent);
+         font-size:13px;
+       ">
+
+    <!-- Empty state -->
+    <div class="muted empty-placeholder" style="padding:8px">
+      No notifications yet<br>
+      System is idle
+    </div>
+
+    </div>
+</div>
+
+  </div>
+</div>
+
+<script defer>
+
+  let currentCycle = 1;
+  const testRecords = [];
+  const firebaseConfig = {
+  apiKey: "AIzaSyAIaZYkfeauth5lqg8E0_y7rKW_4_NtIUQ",
+  authDomain: "smart-dispenser-fyp.firebaseapp.com",
+  projectId: "smart-dispenser-fyp",
+  storageBucket: "smart-dispenser-fyp.appspot.com",
+  messagingSenderId: "652752772926",
+  appId: "1:652752772926:web:a7ee3692a87864c42c566f"
+};
+
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.firestore();
+
+  function logEventToFirestore(data) {
+  db.collection("dispenser_events").add({
+    ...data,
+    timestamp: firebase.firestore.FieldValue.serverTimestamp()
+  })
+  .catch(err => console.error("Firestore error:", err));
+}
+  
+  function addNotification(title, body, type = "info") {
+  const list = document.getElementById("notificationList");
+
+  // Remove empty placeholder if present
+  const empty = list.querySelector(".empty-placeholder");
+  if (empty) empty.remove();
+
+  const div = document.createElement("div");
+  div.className = `notification ${type}`;
+  div.style.display = "flex";
+  div.style.flexDirection = "column";
+  div.style.gap = "4px";
+
+  const icons = {
+  taken: "✔",
+  missed: "✖",
+  unknown: "⚠",
+  info: "(ℹ)"
+};
+  const icon = icons[type] || "ℹ";
+  div.innerHTML = `
+    <div style="font-weight:700"> ${icon} ${title}</div>
+    <div class="muted">${body}</div>
+    <div class="muted" style="font-size:11px">
+      ${new Date().toLocaleTimeString()}
+    </div>`;
+  list.prepend(div);
+}
+
+
+/* ================= AUTO MQTT (STABLE) ================= */
+
+const MQTT_URL  = "wss://3fa72b5859424931862626cce0f36321.s1.eu.hivemq.cloud:8884/mqtt";
+const MQTT_USER = "caretaker";
+const MQTT_PASS = "Caretaker123";
+
+let client = null;
+
+/* ---------- LOGS ---------- */
+function addLog(msg){
+  const logs = document.getElementById("logs");
+  const div = document.createElement("div");
+  div.className = "log-item";
+  div.textContent = new Date().toLocaleTimeString() + " - " + msg;
+  logs.prepend(div);
+}
+
+const schedules = {}; // slot → time
+const scheduleState = {}; // slot → "DONE" | "MISSED"
+/* ---------- AUTO CONNECT ---------- */
+function startMQTT(){
+  addLog("Connecting to HiveMQ Cloud...");
+
+  client = mqtt.connect(MQTT_URL, {
+    username: MQTT_USER,
+    password: MQTT_PASS,
+    clean: true,
+    reconnectPeriod: 2000
+  });
+
+  client.on("connect", () => {
+    connBadge.textContent = "Connected";
+    connBadge.style.background = "green";
+    addLog("MQTT connected (Wi-Fi)");
+    client.subscribe("dispenser/1/#");
+  });
+
+/* ================= MQTT HANDLER ================= */
+client.on("message", (topic, message) => {
+  const msg = message.toString();
+
+  if (topic === "dispenser/1/status") {
+
+  if (msg === "READY_FOR_NEW_CYCLE") {
+  systemState.textContent = "READY";
+  slotInfo.textContent = "HOME";
+  motorInfo.textContent = "HOMED";
+  nextDoseInfo.textContent = "--:--:--";
+  return;
+}
+  
+    if (msg === "LAST_SLOT_REACHED") {
+  addLog("Last slot reached (Slot 7)");
+  nextDose.textContent = "LAST SLOT";
+  return;
+}
+
+ // -------- AI RESULT DISPLAY (UI ONLY) --------
+if (msg.startsWith("PRESENCE_")) {
+
+  const payload = msg.replace("PRESENCE_", "");
+  const parts = payload.split(",");
+  const result = parts[0];
+  const confidence = parts[1] ? parseFloat(parts[1]) : null;
+
+  aiStatus.textContent = result;
+  aiTime.textContent = new Date().toLocaleTimeString();
+  aiTrigger.textContent = "Manual / Timer";
+
+  // Log AI result (with confidence if available)
+  if (confidence !== null) {
+  addLog(`AI RESULT → ${result} (confidence: ${confidence})`);
+} else {
+  addLog(`AI RESULT → ${result}`);
+}
+  // Notify caregiver ONLY if unknown person
+  if (result === "UNKNOWN") {
+    const time = new Date().toLocaleTimeString();
+    const slot = slotInfo.textContent || "Unknown Slot";
+
+    addNotification(
+      " Unknown Person Detected",
+      `An unrecognized individual was detected during medication time (${slot}) at ${time}.`,"unknown");
+  }
+
+  logEventToFirestore({
+  deviceId: "dispenser_1",
+  eventType: "PRESENCE",
+  aiResult: result,
+  confidence: confidence,
+  trigger: "TIMER"
+});
+
+  return;
+}
+    if (msg.startsWith("DISPENSED")) {
+
+    const slot = msg.split(",")[1];
+    scheduleState[slot] = "DONE";
+    renderSchedule();
+
+    systemState.textContent = "DISPENSED";
+    slotInfo.textContent = "Slot " + slot;
+    motorInfo.textContent = "ROTATED";
+    nextDoseInfo.textContent = "--";
+
+    addLog("Slot " + slot + " DONE");
+    const time = new Date().toLocaleTimeString();
+
+    addNotification(
+    " Medication Taken",
+    `Dose for Slot ${slot} was successfully dispensed.`,"taken");
+
+    testRecords.push({
+    timestamp: new Date().toISOString(),
+    cycle: currentCycle,
+    slot: Number(slot),
+    result: "DISPENSED",
+    ai: aiStatus.textContent || "UNKNOWN",
+    trigger: "TIMER"
+});
+ 
+
+    logEventToFirestore({
+    deviceId: "dispenser_1",
+    eventType: "DISPENSED",
+    slot: Number(slot),
+    trigger: "TIMER"
+    });
+
+    document.getElementById("nextSlot").textContent = "--";
+    return;
+  }
+
+  if (msg.startsWith("MISSED")) {
+    const slot = msg.split(",")[1];
+    scheduleState[slot] = "MISSED";
+    renderSchedule();
+
+    systemState.textContent = "MISSED";
+    slotInfo.textContent = "Slot " + slot;
+    motorInfo.textContent = "NO MOVE";
+
+    addLog("Slot " + slot + " MISSED");
+    const time = new Date().toLocaleTimeString();
+
+    addNotification(
+    " Medication Missed",
+    `Dose for Slot ${slot} was not taken.`,"missed");
+
+    testRecords.push({
+    timestamp: new Date().toISOString(),
+    cycle: currentCycle,
+    slot: Number(slot),
+    result: "MISSED",
+    ai: aiStatus.textContent || "UNKNOWN",
+    trigger: "TIMER"
+});
+
+    logEventToFirestore({
+    deviceId: "dispenser_1",
+    eventType: "MISSED",
+    slot: Number(slot),
+    trigger: "TIMER"
+    });
+      
+    document.getElementById("nextSlot").textContent = "--";
+    return;
+  }
+  }
+
+  // Scheduler ACK from ESP32
+  if (topic === "dispenser/1/schedule_ack") {
+
+  const [slot, time] = msg.split(",");
+
+  // Store schedule
+  schedules[slot] = time;
+
+  // Update UI
+  systemState.textContent = "ARMED";
+  slotInfo.textContent = "Slot " + slot;
+  nextDoseInfo.textContent = time;
+  motorInfo.textContent = "WAITING";
+
+  // Show next slot (THIS is what you want)
+  document.getElementById("nextSlot").textContent = "Slot " + slot;
+
+  renderSchedule();
+  addLog("Scheduled: Slot " + slot + " @ " + time);
+  return;
+}
+
+  if (topic === "dispenser/1/alerts" && msg === "ALARM_TRIGGERED") {
+  systemState.textContent = "ALARM";
+  }
+
+  addLog(topic + " → " + msg);
+
+  if (topic === "dispenser/1/cycle_summary") {
+  const [_, dispensed, missed] = msg.split(",");
+
+  addNotification(
+    " Medication Cycle Complete",
+    `Cycle finished. Taken: ${dispensed}, Missed: ${missed}.`,"info");
+
+  // 🔁 RESET DASHBOARD FOR NEXT CYCLE
+  Object.keys(schedules).forEach(k => delete schedules[k]);
+  Object.keys(scheduleState).forEach(k => delete scheduleState[k]);
+  renderSchedule();
+
+  // Reset quick info
+  systemState.textContent = "IDLE";
+  slotInfo.textContent = "—";
+  nextDoseInfo.textContent = "—";
+  motorInfo.textContent = "—";
+  document.getElementById("nextSlot").textContent = "--";
+
+  addLog("Dashboard reset for next cycle");
+  currentCycle++;
+
+  return;
+}
+
+if (topic === "dispenser/1/alerts") {
+  if (msg === "REFILL_SOON") {
+    addNotification(
+      "Refill Reminder",
+      " Medication is running low. Please prepare a refill.","info");
+  }
+
+  if (msg === "REFILL_REQUIRED") {
+    addNotification(
+      "Refill Required",
+      " All medication slots are empty. Refill is required before the next cycle.","info");
+  }
+  return;
+}
+  });
+
+function renderSchedule() {
+  const container = document.getElementById("scheduleList");
+  container.innerHTML = "";
+
+  const slots = Object.keys(schedules).sort((a, b) => a - b);
+
+  if (slots.length === 0) {
+    container.innerHTML = `<div class="muted">No schedules set</div>`;
+    return;
+  }
+
+  slots.forEach(slot => {
+    const div = document.createElement("div");
+    const state = scheduleState[slot] || "PENDING";
+
+div.innerHTML =
+  `Slot ${slot} → ${schedules[slot]} 
+   <span style="
+     margin-left:8px;
+     font-weight:700;
+     color:${state === "DONE" ? "#4ade80" :
+            state === "MISSED" ? "#f87171" : "#9aa6b2"};
+   ">
+     ${state}
+   </span>`;
+
+    container.appendChild(div);
+  });
+}
+
+
+  client.on("error", (err) => {
+    addLog("MQTT error: " + err.message);
+  });
+
+  client.on("close", () => {
+    connBadge.textContent = "Disconnected";
+    connBadge.style.background = "#333";
+    addLog("MQTT disconnected");
+  });
+}
+
+/* ---------- BUTTONS ---------- */
+btnForce.onclick = () => {
+  if (client) {
+    client.publish("dispenser/1/manual", "FORCE_DISPENSE");
+    addLog("Manual force dispense sent");
+  }
+};
+
+btnBuzzer.onclick = () => {
+  if (client) {
+    client.publish("dispenser/1/alerts", "PRESENCE_CHECK");
+    addLog("Presence check requested");
+  }
+};
+
+btnExportData.onclick = exportTestDataToCSV;
+
+btnClearLogs.onclick = () => {
+  logs.innerHTML = "";
+
+  // Clear notifications
+  const notif = document.getElementById("notificationList");
+  notif.innerHTML = `
+    <div class="muted empty-placeholder" style="padding:8px">
+      No notifications yet<br>
+      System is idle
+    </div>
+  `;
+
+  // Clear scheduler UI + state
+  Object.keys(schedules).forEach(k => delete schedules[k]);
+  Object.keys(scheduleState).forEach(k => delete scheduleState[k]);
+  renderSchedule();
+
+  // Reset quick info
+  systemState.textContent = "IDLE";
+  slotInfo.textContent = "—";
+  nextDoseInfo.textContent = "—";
+  motorInfo.textContent = "—";
+  document.getElementById("nextSlot").textContent = "--";
+
+  addLog("Dashboard cleared");
+};
+
+/* ---------- CLOCK ---------- */
+setInterval(() => {
+  localTime.textContent = new Date().toLocaleTimeString();
+}, 1000);
+
+/* ================= TIMER SUPPORT ================= */
+
+// Populate timer dropdowns (RUN ONCE)
+(function () {
+  for (let i = 0; i < 24; i++) {
+    const v = String(i).padStart(2, "0");
+    hourSelect.innerHTML += `<option value="${v}">${v}</option>`;
+  }
+
+  for (let i = 0; i < 60; i++) {
+    const v = String(i).padStart(2, "0");
+    minuteSelect.innerHTML += `<option value="${v}">${v}</option>`;
+    secondSelect.innerHTML += `<option value="${v}">${v}</option>`;
+  }
+})();
+
+// Set timer (HH:MM:SS)
+btnSetTimer.onclick = () => {
+  const t =
+    hourSelect.value + ":" +
+    minuteSelect.value + ":" +
+    secondSelect.value;
+
+  nextDose.textContent = t;
+
+  if (client) {
+    client.publish("dispenser/1/set_time", t);
+    addLog("Timer sent → " + t);
+  }
+};
+
+function parseTimeToDate(timeStr) {
+  // timeStr = "HH:MM:SS"
+  const [h, m, s] = timeStr.split(":").map(Number);
+  const d = new Date();
+  d.setHours(h, m, s, 0);
+  return d;
+}
+
+// Quick demo (+10 seconds) — REAL TIME ONLY
+btnSetNow.onclick = () => {
+
+  const baseTime = new Date();   // ALWAYS current real time
+  baseTime.setSeconds(baseTime.getSeconds() + 10);
+
+  const t =
+    String(baseTime.getHours()).padStart(2, "0") + ":" +
+    String(baseTime.getMinutes()).padStart(2, "0") + ":" +
+    String(baseTime.getSeconds()).padStart(2, "0");
+
+  nextDose.textContent = t;
+
+  if (client) {
+    client.publish("dispenser/1/set_time", t);
+    addLog("Quick timer (+10s) → " + t);
+  }
+};
+
+// ---------- THEME TOGGLE ----------
+const themeBtn = document.getElementById("themeToggle");
+
+themeBtn.onclick = () => {
+  document.body.classList.toggle("light");
+
+  const isLight = document.body.classList.contains("light");
+  themeBtn.textContent = isLight ? "Dark mode" : "Light mode";
+
+  // Optional: remember preference
+  localStorage.setItem("theme", isLight ? "light" : "dark");
+};
+
+// Restore theme on reload
+if (localStorage.getItem("theme") === "light") {
+  document.body.classList.add("light");
+  themeBtn.textContent = "Dark mode";
+}
+
+/* ---------- START ---------- */
+window.addEventListener("load", () => {
+  addLog("Dashboard ready");
+  startMQTT();
+});
+
+function exportTestDataToCSV() {
+
+  if (testRecords.length === 0) {
+    alert("No test data recorded yet.");
+    return;
+  }
+
+  let csv =
+    "Timestamp,Cycle,Slot,Dispense Result,AI Result,Trigger\n";
+
+  testRecords.forEach(r => {
+    csv +=
+      `${r.timestamp},${r.cycle},${r.slot},${r.result},${r.ai},${r.trigger}\n`;
+  });
+
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `dispenser_test_data_${Date.now()}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+
+  URL.revokeObjectURL(url);
+}
+</script>
+</body>
+</html>
