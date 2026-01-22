@@ -1,2 +1,4 @@
 # Automated Drug Dispenser with Wi-Fi Based Caregiver Notification System
-FYP drug dispenser, Arduino IDE + simple facial recognition via cmd.
+FYP drug dispenser, built using Arduino IDE for ESP32 logic.
+Facial recognition for patient identification is developed using DeepFace framework and FaceNet512 model.
+Caregiver dashboard are built using HTML/CSS.
